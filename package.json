@@ -1,0 +1,29 @@
+{
+  "name": "terrarium",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "sim:headless": "tsx src/sim/headlessRunner.ts",
+    "server": "tsx src/server/index.ts",
+    "server:dev": "tsx watch src/server/index.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "pixi-viewport": "6.0.3",
+    "pixi.js": "8.19.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vitest": "^3.0.0"
+  }
+}

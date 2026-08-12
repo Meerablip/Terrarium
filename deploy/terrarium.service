@@ -1,0 +1,17 @@
+[Unit]
+Description=Terrarium simulation server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/terrarium
+ExecStart=/usr/bin/npx tsx src/server/index.ts
+Restart=always
+RestartSec=5
+User=terrarium
+Environment=PORT=8080
+Environment=DB_PATH=/opt/terrarium/data/terrarium.db
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
