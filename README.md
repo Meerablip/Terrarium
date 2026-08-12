@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/walker.svg" width="320" height="96" alt="a pixel citizen walking across the terrarium" />
+  <img src="docs/assets/walker.svg" width="640" height="224" alt="a small pixel-art farm scene with a character walking down the garden path" />
 </p>
 
 <h1 align="center">Terrarium</h1>
