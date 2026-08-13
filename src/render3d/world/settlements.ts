@@ -24,6 +24,9 @@ export interface SettlementsHandle {
   applySettlements(settlements: WireSnapshotV1["settlements"]): void;
   /** World-space anchor for a settlement, e.g. for label projection. */
   anchorFor(settlementId: number): Object3D | null;
+  /** Re-tints the shared per-tier materials from a (possibly day/night-
+   * blended) palette. Cheap, safe to call every frame. */
+  applyPalette(palette: WorldPalette): void;
   dispose(): void;
 }
 
@@ -111,6 +114,12 @@ export function createSettlements(palette: WorldPalette): SettlementsHandle {
     return entries.get(settlementId)?.root ?? null;
   }
 
+  function applyPalette(nextPalette: WorldPalette): void {
+    for (const tier of Object.keys(materialByTier) as Tier[]) {
+      materialByTier[tier].color.set(nextPalette[TIER_PALETTE_KEY[tier]] as string);
+    }
+  }
+
   function dispose(): void {
     for (const tier of Object.keys(geometryByTier) as Tier[]) {
       geometryByTier[tier].dispose();
@@ -118,5 +127,5 @@ export function createSettlements(palette: WorldPalette): SettlementsHandle {
     }
   }
 
-  return { group, applySettlements, anchorFor, dispose };
+  return { group, applySettlements, anchorFor, applyPalette, dispose };
 }

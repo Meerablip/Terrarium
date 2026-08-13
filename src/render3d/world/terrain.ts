@@ -20,6 +20,7 @@ import { BufferAttribute, BufferGeometry, DynamicDrawUsage, Group, Mesh } from "
 
 import type { WireSnapshotV1 } from "../../shared/wireFormat.ts";
 import { PATH_WEAR_MAX, PATH_WEAR_TINT_STRENGTH } from "../../sim/constants.ts";
+import { hexToRgb } from "./color.ts";
 import type { WorldPalette } from "./palette.ts";
 import { toonMaterial } from "./toon.ts";
 
@@ -28,13 +29,15 @@ export interface TerrainHandle {
   /** Recomputes vertex colors from a fresh terrain snapshot. Call once per
    * incoming WireSnapshotV1, not per render frame. */
   applyTerrain(terrain: WireSnapshotV1["terrain"]): void;
+  /** Updates the low/high/wear colors terrain reads for its next
+   * applyTerrain call, from a (possibly day/night-blended) palette. Cheap
+   * (3 hex parses), but deliberately a separate call from applyTerrain so
+   * the day/night blend driver can call it at whatever cadence it likes
+   * (e.g. every frame — this is far cheaper than the toon gradient
+   * texture's own coarser-cadence recompute) without coupling to the
+   * snapshot cadence. */
+  applyPalette(palette: WorldPalette): void;
   dispose(): void;
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const value = hex.replace("#", "");
-  const int = Number.parseInt(value, 16);
-  return [((int >> 16) & 255) / 255, ((int >> 8) & 255) / 255, (int & 255) / 255];
 }
 
 function lerp3(
@@ -114,11 +117,19 @@ export function createTerrain(
   mesh.frustumCulled = false;
   group.add(mesh);
 
-  // Reused across applyTerrain calls to avoid per-snapshot allocation.
-  const low: [number, number, number] = hexToRgb(palette.grassDark);
-  const high: [number, number, number] = hexToRgb(palette.grassLight);
-  const wearColor: [number, number, number] = hexToRgb(palette.pathDirt);
+  // Reused across applyTerrain calls to avoid per-snapshot allocation;
+  // reassigned wholesale by applyPalette (see below) rather than mutated
+  // in place, since hexToRgb already allocates a fresh tuple anyway.
+  let low: [number, number, number] = hexToRgb(palette.grassDark);
+  let high: [number, number, number] = hexToRgb(palette.grassLight);
+  let wearColor: [number, number, number] = hexToRgb(palette.pathDirt);
   const cellColor: [number, number, number] = [0, 0, 0];
+
+  function applyPalette(nextPalette: WorldPalette): void {
+    low = hexToRgb(nextPalette.grassDark);
+    high = hexToRgb(nextPalette.grassLight);
+    wearColor = hexToRgb(nextPalette.pathDirt);
+  }
 
   function applyTerrain(terrain: WireSnapshotV1["terrain"]): void {
     const { resource, capacity, pathWear } = terrain;
@@ -147,5 +158,5 @@ export function createTerrain(
     material.dispose();
   }
 
-  return { group, applyTerrain, dispose };
+  return { group, applyTerrain, applyPalette, dispose };
 }

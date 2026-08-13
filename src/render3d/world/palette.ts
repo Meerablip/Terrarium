@@ -2,14 +2,13 @@
 // /THIRD_PARTY_NOTICES.md. Original:
 // apps/desktop/src/plugins/builtin/voxel_graph/world/palette.ts
 //
-// `WorldPalette` and `GHIBLI_DAY` are ported verbatim. `paletteForMood` is
-// kept as kuku's own honest stub for now — it always returns the day
-// palette regardless of `mood`, same as upstream. Phase 4 (night cycle) adds
-// a real `GHIBLI_NIGHT` and makes this branch; see that phase in the
-// implementation plan before touching this function. `clusterAccent`
-// (kuku's per-island accent-color helper) isn't ported yet — nothing in
-// Phase 1-2 needs it, and Phase 3 (settlement markers) will decide whether
-// Terrarium wants a per-settlement accent at all before porting it.
+// `WorldPalette` and `GHIBLI_DAY` are ported verbatim. `GHIBLI_NIGHT` is
+// genuinely new — kuku never had a night palette (its own paletteForMood
+// was a permanent day-only stub, "the world is intentionally always
+// daytime"), so there was nothing to port for this half. `clusterAccent`
+// (kuku's per-island accent-color helper) still isn't ported — nothing in
+// Phases 1-3 needed it, and Phase 3 (settlement markers) ended up not using
+// a per-settlement accent color.
 //
 // ── Agent World Palette ──
 //
@@ -166,8 +165,84 @@ const GHIBLI_DAY: WorldPalette = {
   labelBg: "rgba(252,250,243,0.82)",
 };
 
-export function paletteForMood(_mood: WorldMood): WorldPalette {
-  // TODO(Phase 4 — night cycle): always returns day for now, same as kuku's
-  // own upstream stub. Add GHIBLI_NIGHT and branch on _mood here.
-  return GHIBLI_DAY;
+// Hand-tuned night companion to GHIBLI_DAY — deep-blue/indigo sky, dimmed
+// and desaturated terrain/nature so shadows never go pure black (a touch of
+// ambient always keeps some light, classic stylized-night technique), and
+// warm lit windows as the key "cozy at night" payoff (dovetails directly
+// with Phase 5's hearth glow — a lit window costs nothing extra once this
+// exists). Every field mirrors GHIBLI_DAY's shape so paletteBlendFor (in
+// dayNightCycle.ts) can lerp between the two field-by-field.
+const GHIBLI_NIGHT: WorldPalette = {
+  mood: "night",
+
+  ink: "#15141a",
+
+  skyTop: "#0f1a3a",
+  skyHorizon: "#2b3a5c",
+  fog: "#1c2440",
+  fogDensity: 0.00046,
+  hemiSky: "#2a3352",
+  hemiGround: "#232a3e",
+  hemiIntensity: 0.28,
+  sunColor: "#b7c4e8", // repurposed as moonlight — cooler, dimmer
+  sunIntensity: 0.55,
+  ambient: "#33395c",
+  ambientIntensity: 0.32, // never fully dark — classic stylized-night floor
+
+  cloud: "#3a4468",
+  cloudShadow: "#262c46",
+  sunGlow: "#c9d4f2", // moon glow
+
+  water: "#1e2f52",
+  waterDeep: "#131f3a",
+  waterShallow: "#2c4468",
+  waveLine: "#3d5a82",
+  foam: "#cdd8ee",
+
+  grassLight: "#4c5a6e",
+  grass: "#3c4a5e",
+  grassDark: "#2c3a4c",
+  cliff: "#4a4258",
+  cliffDark: "#342e42",
+  sand: "#5a5670",
+  pathDirt: "#463f56",
+  plaza: "#454060",
+
+  trunk: "#3a2f3e",
+  trunkDark: "#281f2c",
+  canopyLight: "#3a4a52",
+  canopy: "#2c3c44",
+  canopyDark: "#1f2c32",
+  pine: "#243a38",
+  bush: "#2e3c3e",
+  rock: "#4a4e5c",
+  rockDark: "#363a46",
+  flowers: ["#8a4a6a", "#7a6a3a", "#7a5a80", "#5a6a9a", "#8a8298"],
+  crop: "#6a5a3a",
+  fieldSoil: "#443a4a",
+
+  wallLight: "#4a4658",
+  wall: "#3e3a4c",
+  wallShadow: "#2e2c3c",
+  roof: "#22212e",
+  roofRidge: "#18171f",
+  beam: "#332c3a",
+  door: "#2e2436",
+  window: "#4a5670",
+  windowWarm: "#f4cd8c", // stays warm — the lit-window payoff, unchanged from day
+  foundation: "#42404e",
+
+  // Brightened/more-saturated relative to surroundings — a beacon/focus
+  // marker should read as MORE prominent against a dark scene, the inverse
+  // of most other fields here.
+  beacon: "#7ee0ff",
+  focusFlag: "#ff9a52",
+  trail: "#ffdb8a",
+
+  labelText: "#e8e4f0",
+  labelBg: "rgba(28,26,40,0.85)",
+};
+
+export function paletteForMood(mood: WorldMood): WorldPalette {
+  return mood === "night" ? GHIBLI_NIGHT : GHIBLI_DAY;
 }

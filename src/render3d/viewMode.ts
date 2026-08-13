@@ -13,12 +13,18 @@ import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js
 
 export type ViewMode = "ground" | "map";
 
-// Starting point for Phase 3 — camera distance (world units) beyond which
-// individual citizens/homes/materials give way to settlement markers.
-// Tuned against the camera's own distance bounds (camera.ts:
-// minDistance=40, maxDistance ~= worldDiagonal*1.6 ~= 3621), roughly a
-// third of the way to max zoom-out.
-export const MAP_VIEW_DISTANCE_THRESHOLD = 900;
+// Camera distance (world units) beyond which individual citizens/homes/
+// materials give way to settlement markers. Must sit above camera.ts's
+// default framing distance (worldRadius * 0.85 ~= 962 for Terrarium's
+// 1600x1600 world) — otherwise the app opens in map view by default, which
+// doesn't match the old 2D renderer's behavior (pixi-viewport starts at
+// scaled=1.0, well above MAP_VIEW_ZOOM_THRESHOLD=0.5, i.e. ground view).
+// Found this the hard way: an untested "starting point" value here
+// (900) sat just *under* the untested default framing distance,
+// silently starting every session in map view. 1400 gives real headroom
+// against camera.ts's ~962 default while still being reachable by zooming
+// out (camera.ts's maxDistance ~= worldDiagonal*1.6 ~= 3621).
+export const MAP_VIEW_DISTANCE_THRESHOLD = 1400;
 
 export function getViewMode(camera: PerspectiveCamera, controls: OrbitControls): ViewMode {
   const distance = camera.position.distanceTo(controls.target);

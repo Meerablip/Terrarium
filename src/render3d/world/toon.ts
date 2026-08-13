@@ -7,6 +7,21 @@
 // Shared building blocks for the painterly look: a banded toon material whose
 // lighting falls into a few flat steps, and helpers to control the ink outline
 // drawn by three's OutlineEffect (which reads material.userData.outlineParameters).
+//
+// Night-mode note: the gradient ramp below ([150,205,255]) is a fixed
+// lighting-quantization curve, NOT palette-dependent — it never reads
+// `palette` at all, so there's no per-mood cache-thrash concern for it
+// specifically (contrary to what the implementation plan's Phase 4 section
+// assumed before this code was actually re-read here). What IS
+// palette-dependent and baked once per material is
+// `outlineParameters.color` (from `palette.ink`) — day and night inks are
+// both near-black (#2c2a26 vs #15141a), so Phase 4 leaves per-material
+// outline color un-updated on a mood blend as a deliberate, low-value-to-fix
+// simplification rather than walking every material in every world module
+// for a barely-visible difference. The genuinely expensive per-frame-vs-
+// coarser-cadence tradeoff this plan flagged turned out to live in
+// sky.ts's dome/hills vertex-color buffers instead — see
+// SkyHandle.applyPaletteVertexColors.
 
 import { DataTexture, MeshToonMaterial, NearestFilter, RedFormat } from "three";
 

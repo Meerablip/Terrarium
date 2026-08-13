@@ -18,6 +18,9 @@ import { toonMaterial } from "./toon.ts";
 export interface MaterialsHandle {
   group: Group;
   applyMaterials(materials: WireSnapshotV1["materials"]): void;
+  /** Re-tints the shared per-kind materials from a (possibly day/night-
+   * blended) palette. Cheap, safe to call every frame. */
+  applyPalette(palette: WorldPalette): void;
   dispose(): void;
 }
 
@@ -67,10 +70,16 @@ export function createMaterials(palette: WorldPalette): MaterialsHandle {
     }
   }
 
+  function applyPalette(nextPalette: WorldPalette): void {
+    for (const [index, key] of KIND_PALETTE_KEYS.entries()) {
+      materialsByKind[index]?.color.set(nextPalette[key]);
+    }
+  }
+
   function dispose(): void {
     geometry.dispose();
     for (const material of materialsByKind) material.dispose();
   }
 
-  return { group, applyMaterials, dispose };
+  return { group, applyMaterials, applyPalette, dispose };
 }

@@ -5,7 +5,7 @@
 // functions — same renderer options, same painterly wrap, same resize
 // handling, no framework dependency.
 
-import { Color, Scene, WebGLRenderer } from "three";
+import { Color, FogExp2, Scene, WebGLRenderer } from "three";
 
 import { PainterlyRenderer } from "./world/postfx.ts";
 
@@ -14,6 +14,12 @@ export interface Render3DApp {
   painterly: PainterlyRenderer;
   scene: Scene;
   canvas: HTMLCanvasElement;
+  /** Updates scene.background and scene.fog from the given colors —
+   * called every frame from main.ts with the current (possibly day/night-
+   * blended) palette's fog color/density, so the sky/fog visibly shift
+   * across a day/night transition instead of staying fixed at whatever
+   * color was passed to createRender3DApp at startup. */
+  applyAtmosphere(fogColor: string, fogDensity: number): void;
   /** Call once per animation frame after updating the scene. */
   render(camera: Parameters<PainterlyRenderer["render"]>[1]): void;
   dispose(): void;
@@ -34,6 +40,7 @@ export function createRender3DApp(parent: HTMLElement, initialBackground: string
   // Match the sky before the first world build so loading never flashes
   // black — same reasoning as kuku's own initial scene.background set.
   scene.background = new Color(initialBackground);
+  scene.fog = new FogExp2(initialBackground, 0);
 
   parent.appendChild(renderer.domElement);
 
@@ -46,6 +53,13 @@ export function createRender3DApp(parent: HTMLElement, initialBackground: string
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(parent);
   resize();
+
+  function applyAtmosphere(fogColor: string, fogDensity: number): void {
+    (scene.background as Color).set(fogColor);
+    const fog = scene.fog as FogExp2;
+    fog.color.set(fogColor);
+    fog.density = fogDensity;
+  }
 
   function render(camera: Parameters<PainterlyRenderer["render"]>[1]): void {
     painterly.render(scene, camera);
@@ -60,5 +74,5 @@ export function createRender3DApp(parent: HTMLElement, initialBackground: string
     }
   }
 
-  return { renderer, painterly, scene, canvas: renderer.domElement, render, dispose };
+  return { renderer, painterly, scene, canvas: renderer.domElement, applyAtmosphere, render, dispose };
 }

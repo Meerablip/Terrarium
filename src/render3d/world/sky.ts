@@ -6,6 +6,16 @@
 // (../voxel_layout); here it's ported alongside the rest of world/ as
 // ./layout.ts, so the import is `./layout.ts` instead.
 //
+// Phase 4 addition (day/night cycle): applyPalette/applyPaletteVertexColors
+// weren't in kuku's version at all (kuku's sky is permanently daytime — see
+// palette.ts's own history). Lighting/cloud color are cheap to re-apply
+// every frame; the dome/hills' baked per-vertex gradients are refactored
+// out of the original inline construction code into reusable closures
+// (recomputeDomeColors/recomputeHillColors below) so applyPaletteVertexColors
+// can recompute them from a new palette without rebuilding geometry — kept
+// as a SEPARATE, coarser-cadence call from applyPalette since re-touching
+// every dome+hill vertex is real work, unlike the cheap lighting/cloud path.
+//
 // ── Agent World Sky ──
 //
 // A soft painterly daytime sky: a gradient dome, a warm directional sun that
@@ -35,7 +45,30 @@ import { noOutline } from "./toon.ts";
 export interface SkyHandle {
   group: Group;
   update(nowSeconds: number): void;
+  /** Re-applies a (possibly day/night-blended) palette. Lighting/cloud
+   * color are cheap (a handful of Color.set() + intensity writes) and safe
+   * every frame; the dome/hills' per-vertex gradient buffers are NOT
+   * touched here — see applyPaletteVertexColors, meant for a coarser
+   * cadence (Phase 4's "toon gradient" cost concern applies here too: full
+   * dome+hills vertex recompute is real work, not a one-liner). */
+  applyPalette(palette: WorldPalette): void;
+  /** Recomputes the dome + hazy-hills vertex-color gradients from a
+   * palette and re-uploads the buffers. Meaningfully more expensive than
+   * applyPalette (iterates every dome/hill vertex) — call at a coarser
+   * cadence (e.g. a few times/sec), not every frame, per the implementation
+   * plan's guidance on the toon gradient texture's own cache-thrash
+   * tradeoff (same reasoning applies to this baked-vertex-color case). */
+  applyPaletteVertexColors(palette: WorldPalette): void;
   dispose(): void;
+}
+
+interface HillRingDef {
+  radius: number;
+  height: number;
+  width: number;
+  haze: number;
+  cool: number;
+  count: number;
 }
 
 export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle {
@@ -51,23 +84,31 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
 
   // ── Gradient dome ──
   const domeGeometry = new SphereGeometry(domeRadius, 32, 20);
-  const top = new Color(palette.skyTop);
-  const horizon = new Color(palette.skyHorizon);
-  const position = domeGeometry.attributes.position;
-  const colors: number[] = [];
-  const tmp = new Color();
-  for (let i = 0; i < position.count; i++) {
-    const y = position.getY(i) / domeRadius; // -1..1
-    const t = Math.max(0, y) ** 0.6; // bias the gradient toward the top
-    tmp.copy(horizon).lerp(top, t);
-    colors.push(tmp.r, tmp.g, tmp.b);
-  }
-  domeGeometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+  const domePosition = domeGeometry.attributes.position;
+  const domeColorAttribute = new Float32BufferAttribute(new Float32Array(domePosition.count * 3), 3);
+  domeGeometry.setAttribute("color", domeColorAttribute);
   const domeMaterial = new MeshToonMaterial({ vertexColors: true, side: BackSide, fog: false });
   noOutline(domeMaterial);
   const dome = new Mesh(domeGeometry, domeMaterial);
   dome.renderOrder = -10;
   group.add(dome);
+
+  function recomputeDomeColors(forPalette: WorldPalette): void {
+    const top = new Color(forPalette.skyTop);
+    const horizon = new Color(forPalette.skyHorizon);
+    const tmp = new Color();
+    const array = domeColorAttribute.array as Float32Array;
+    for (let i = 0; i < domePosition.count; i++) {
+      const y = domePosition.getY(i) / domeRadius; // -1..1
+      const t = Math.max(0, y) ** 0.6; // bias the gradient toward the top
+      tmp.copy(horizon).lerp(top, t);
+      array[i * 3] = tmp.r;
+      array[i * 3 + 1] = tmp.g;
+      array[i * 3 + 2] = tmp.b;
+    }
+    domeColorAttribute.needsUpdate = true;
+  }
+  recomputeDomeColors(palette);
 
   // ── Distant hazy hills + mountains — layered atmospheric backdrop ──
   //
@@ -75,11 +116,7 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
   // far mountain range that all but dissolves into the sky. Each layer is hazed
   // (lerped toward the horizon colour) and the far ones get a subtle cool shift
   // so distance reads through atmospheric perspective.
-  const hillGeometries: BufferGeometry[] = [];
-  const hillColors: number[] = [];
-  const horizonColor = new Color(palette.skyHorizon);
-  const coolHaze = new Color(palette.skyHorizon).lerp(new Color(palette.skyTop), 0.35);
-  const hillRings = [
+  const hillRings: HillRingDef[] = [
     {
       radius: worldRadius * 1.42,
       height: worldRadius * 0.15,
@@ -105,9 +142,16 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
       count: 20,
     },
   ];
+
+  // Positions are fixed at construction (deterministic from stableNoise);
+  // only per-ring colors change on a palette blend. Track each ring's
+  // [start, end) vertex range in the merged geometry so
+  // recomputeHillColors can rewrite just the color buffer without touching
+  // positions or rebuilding the merge.
+  const hillGeometries: BufferGeometry[] = [];
+  const ringVertexRanges: Array<{ start: number; count: number }> = [];
   for (const ring of hillRings) {
-    const hazeTarget = horizonColor.clone().lerp(coolHaze, ring.cool);
-    const col = new Color(palette.canopyDark).lerp(hazeTarget, ring.haze);
+    const ringStart = hillGeometries.reduce((sum, g) => sum + g.attributes.position.count, 0);
     for (let i = 0; i < ring.count; i++) {
       const angle =
         (i / ring.count) * Math.PI * 2 + stableNoise(`hill-a:${ring.radius}:${i}`) * 0.4;
@@ -117,19 +161,41 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
       const dome2 = new SphereGeometry(1, 10, 7);
       dome2.scale(w, h, w);
       dome2.translate(Math.cos(angle) * r, -h * 0.4, Math.sin(angle) * r);
-      const verts = dome2.attributes.position.count;
-      for (let v = 0; v < verts; v++) hillColors.push(col.r, col.g, col.b);
       hillGeometries.push(dome2);
     }
+    const ringEnd = hillGeometries.reduce((sum, g) => sum + g.attributes.position.count, 0);
+    ringVertexRanges.push({ start: ringStart, count: ringEnd - ringStart });
   }
   const hillGeometry = mergeGeometries(hillGeometries);
   for (const geometry of hillGeometries) geometry.dispose();
-  hillGeometry.setAttribute("color", new Float32BufferAttribute(hillColors, 3));
+  const hillColorAttribute = new Float32BufferAttribute(
+    new Float32Array(hillGeometry.attributes.position.count * 3),
+    3,
+  );
+  hillGeometry.setAttribute("color", hillColorAttribute);
   const hillMaterial = new MeshToonMaterial({ vertexColors: true, fog: false });
   noOutline(hillMaterial);
   const hills = new Mesh(hillGeometry, hillMaterial);
   hills.renderOrder = -9;
   group.add(hills);
+
+  function recomputeHillColors(forPalette: WorldPalette): void {
+    const horizonColor = new Color(forPalette.skyHorizon);
+    const coolHaze = new Color(forPalette.skyHorizon).lerp(new Color(forPalette.skyTop), 0.35);
+    const array = hillColorAttribute.array as Float32Array;
+    for (const [ringIndex, ring] of hillRings.entries()) {
+      const hazeTarget = horizonColor.clone().lerp(coolHaze, ring.cool);
+      const col = new Color(forPalette.canopyDark).lerp(hazeTarget, ring.haze);
+      const { start, count } = ringVertexRanges[ringIndex];
+      for (let v = start; v < start + count; v++) {
+        array[v * 3] = col.r;
+        array[v * 3 + 1] = col.g;
+        array[v * 3 + 2] = col.b;
+      }
+    }
+    hillColorAttribute.needsUpdate = true;
+  }
+  recomputeHillColors(palette);
 
   // ── Clouds ──
   const cloudGeometries: BufferGeometry[] = [];
@@ -168,6 +234,22 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
     clouds.position.x = drift;
   }
 
+  function applyPalette(nextPalette: WorldPalette): void {
+    ambient.color.set(nextPalette.ambient);
+    ambient.intensity = nextPalette.ambientIntensity;
+    hemi.color.set(nextPalette.hemiSky);
+    hemi.groundColor.set(nextPalette.hemiGround);
+    hemi.intensity = nextPalette.hemiIntensity;
+    sun.color.set(nextPalette.sunColor);
+    sun.intensity = nextPalette.sunIntensity;
+    cloudMaterial.color.set(nextPalette.cloud);
+  }
+
+  function applyPaletteVertexColors(nextPalette: WorldPalette): void {
+    recomputeDomeColors(nextPalette);
+    recomputeHillColors(nextPalette);
+  }
+
   function dispose(): void {
     domeGeometry.dispose();
     domeMaterial.dispose();
@@ -177,5 +259,5 @@ export function createSky(palette: WorldPalette, worldRadius: number): SkyHandle
     cloudMaterial.dispose();
   }
 
-  return { group, update, dispose };
+  return { group, update, applyPalette, applyPaletteVertexColors, dispose };
 }

@@ -2,12 +2,15 @@
 // whatever state arrives over the WebSocket connection to the world
 // server — same sim/render split as before, just a different renderer.
 //
-// Phases 1-3 of the render3d cutover (see the implementation plan): sky,
+// Phases 1-4 of the render3d cutover (see the implementation plan): sky,
 // data-driven terrain, primitive citizens/homes/materials/settlements,
 // camera pan/orbit/zoom, smooth citizen movement, click-to-select-and-follow,
-// ground/map LOD, and settlement name labels. No night cycle, no fire yet —
-// those are later phases. The old Pixi renderer's files (src/render/*.ts)
-// and its dependencies stay in the tree untouched for now, per the plan's
+// ground/map LOD, settlement name labels, and a tick-driven day/night cycle
+// (world.update() blends the palette every frame; this file just re-reads
+// world.palette each frame to keep the sky/fog in sync — see
+// render3d/world/engine.ts for where the actual blending happens). No fire
+// yet — that's Phase 5. The old Pixi renderer's files (src/render/*.ts) and
+// its dependencies stay in the tree untouched for now, per the plan's
 // rollback-safety guidance; nothing here imports them anymore.
 
 import { createRender3DApp } from "./render3d/app.ts";
@@ -107,6 +110,7 @@ async function main(): Promise<void> {
     lastFrameMs = nowMs;
 
     world.update(nowSeconds, deltaSeconds);
+    app.applyAtmosphere(world.palette.fog, world.palette.fogDensity);
     selection.update(nowSeconds);
     camera.controls.update();
     app.render(camera.camera);

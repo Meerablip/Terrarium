@@ -35,12 +35,19 @@ export interface CitizensHandle {
   /** Called once per animation frame — advances visual position/heading
    * toward each citizen's current target. */
   update(deltaSeconds: number): void;
-  /** World-space anchor for a citizen — for camera-follow / selection in a
-   * later phase, mirrors kuku's engine.anchorFor(filePath). */
+  /** World-space anchor for a citizen — for camera-follow / selection,
+   * mirrors kuku's engine.anchorFor(filePath). Callers read `.position`
+   * treating it as world-space, which is only true because every ancestor
+   * group (citizens.ts's own `group`, engine.ts's `groundLayers`/`group`)
+   * currently has an identity transform. If that ever changes, callers
+   * would need `.getWorldPosition()` instead of `.position` directly. */
   anchorFor(citizenId: number): Object3D | null;
   /** Raycasts against every citizen's body mesh and returns the id of the
    * closest hit, or null. Mirrors kuku's engine.pick(raycaster). */
   pick(raycaster: Raycaster): number | null;
+  /** Re-tints the shared body/hat materials from a (possibly day/night-
+   * blended) palette. Cheap, safe to call every frame. */
+  applyPalette(palette: WorldPalette): void;
   dispose(): void;
 }
 
@@ -175,6 +182,13 @@ export function createCitizens(palette: WorldPalette): CitizensHandle {
     let closestId: number | null = null;
     let minDistance = Infinity;
     for (const [id, entry] of entries) {
+      // Raycasting reads each object's matrixWorld, which three.js only
+      // recomputes automatically inside Scene.updateMatrixWorld() (in turn
+      // called by WebGLRenderer.render()). A click handler can fire between
+      // applySnapshot()/update() moving a citizen and the next render call,
+      // so relying on render-loop timing here would be a real, if rare,
+      // stale-matrix bug — update explicitly instead of assuming freshness.
+      entry.root.updateMatrixWorld(true);
       const intersects = raycaster.intersectObject(entry.root, true);
       if (intersects.length > 0) {
         const dist = intersects[0].distance;
@@ -187,6 +201,11 @@ export function createCitizens(palette: WorldPalette): CitizensHandle {
     return closestId;
   }
 
+  function applyPalette(nextPalette: WorldPalette): void {
+    bodyMaterial.color.set(nextPalette.wallLight);
+    hatMaterial.color.set(nextPalette.roof);
+  }
+
   function dispose(): void {
     bodyGeometry.dispose();
     bodyMaterial.dispose();
@@ -194,5 +213,5 @@ export function createCitizens(palette: WorldPalette): CitizensHandle {
     hatMaterial.dispose();
   }
 
-  return { group, applyCitizens, update, anchorFor, pick, dispose };
+  return { group, applyCitizens, update, anchorFor, pick, applyPalette, dispose };
 }

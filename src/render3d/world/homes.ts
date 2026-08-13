@@ -33,6 +33,10 @@ export interface HomesHandle {
   /** World-space anchor for a home, e.g. for hearth placement in a later
    * phase — mirrors kuku's doorPosition/roofPosition helper pattern. */
   anchorFor(homeId: number): Object3D | null;
+  /** Re-tints every shared material from a (possibly day/night-blended)
+   * palette — cheap (a handful of Color.set() calls), safe to call every
+   * frame from the day/night blend driver. */
+  applyPalette(palette: WorldPalette): void;
   dispose(): void;
 }
 
@@ -157,6 +161,14 @@ export function createHomes(palette: WorldPalette): HomesHandle {
     return entries.get(homeId)?.root ?? null;
   }
 
+  function applyPalette(nextPalette: WorldPalette): void {
+    scaffoldMaterial.color.set(nextPalette.foundation);
+    wallMaterial.color.set(nextPalette.wall);
+    roofMaterial.color.set(nextPalette.roof);
+    barTrackMaterial.color.set(nextPalette.wallShadow);
+    barFillMaterial.color.set(nextPalette.focusFlag);
+  }
+
   function dispose(): void {
     scaffoldGeometry.dispose();
     scaffoldMaterial.dispose();
@@ -170,5 +182,5 @@ export function createHomes(palette: WorldPalette): HomesHandle {
     barFillMaterial.dispose();
   }
 
-  return { group, applyHomes, anchorFor, dispose };
+  return { group, applyHomes, anchorFor, applyPalette, dispose };
 }
