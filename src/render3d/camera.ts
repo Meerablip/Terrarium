@@ -5,27 +5,23 @@
 // pan-bounds wrapper is net-new — OrbitControls has no built-in pan-clamp
 // equivalent to pixi-viewport's clamp({direction: "all"}).
 
-import { MOUSE, PerspectiveCamera, Vector3 } from "three";
+import { MOUSE, PerspectiveCamera, TOUCH, Vector3 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 // Matches kuku's bird's-eye framing clamp (voxel_canvas.tsx: MIN_POLAR/MAX_POLAR).
 const MIN_POLAR = Math.PI * 0.18;
 const MAX_POLAR = Math.PI * 0.33;
 
-// kuku starts the camera at a fixed isometric-ish direction, scaled by a
-// distance tuned for its (larger, note-count-driven) worlds. Terrarium's
-// world is a fixed 1600x1600 units (GRID_COLS*CELL_SIZE), so the constant
-// below is a Phase-1 starting point, not a direct port of kuku's number —
-// expect to retune once something is actually on screen.
 const ISO_DIRECTION = new Vector3(1, 1.05, 1).normalize();
 
 export interface Render3DCamera {
   camera: PerspectiveCamera;
   controls: OrbitControls;
   /** Frames the camera to view a world of the given radius (world units),
-   * centered at (centerX, centerZ) — mirrors today's
-   * `viewport.moveCenter(worldWidth/2, worldHeight/2)` startup behavior. */
+   * centered at (centerX, centerZ). */
   frame(centerX: number, centerZ: number, worldRadius: number): void;
+  /** Advances keyboard/touch/scroll navigation smooth movements per frame. */
+  update(deltaSeconds: number): void;
   dispose(): void;
 }
 
@@ -43,21 +39,18 @@ export function createRender3DCamera(
   controls.maxPolarAngle = MAX_POLAR;
   controls.enablePan = true;
   controls.screenSpacePanning = false;
-  // Left drag orbits, middle or right drag pans — same as kuku's mapping.
+
+  // Mouse: Left drag orbits, middle or right drag pans
   controls.mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.PAN, RIGHT: MOUSE.PAN };
 
-  // Zoom-equivalent bounds (pixi-viewport's clampZoom({minScale, maxScale})).
-  // world diagonal ~2263 units (1600*sqrt(2)); bounds chosen so the closest
-  // zoom reads roughly street-level and the farthest still frames the whole
-  // grid with margin. Starting point for Phase 1 tuning.
+  // Touch: Single finger orbits, two fingers pinch-zoom and pan
+  controls.touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+
   const worldDiagonal = Math.hypot(worldWidth, worldHeight);
   controls.minDistance = 40;
   controls.maxDistance = worldDiagonal * 1.6;
 
-  // Pan-clamp: keep the orbit target inside the world bounds plus a little
-  // margin, since OrbitControls (unlike pixi-viewport) has no built-in pan
-  // bounds. Re-checked on every "change" event, same trigger kuku uses for
-  // its own per-frame zoom-readout update.
+  // Pan-clamp: keep the orbit target inside the world bounds plus margin
   const margin = Math.max(worldWidth, worldHeight) * 0.15;
   const minX = -margin;
   const maxX = worldWidth + margin;
@@ -77,20 +70,107 @@ export function createRender3DCamera(
     }
   });
 
+  // Track active pressed keys for continuous keyboard movement
+  const keysPressed = new Set<string>();
+
+  function onKeyDown(e: KeyboardEvent): void {
+    if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") return;
+    keysPressed.add(e.code);
+    keysPressed.add(e.key);
+  }
+
+  function onKeyUp(e: KeyboardEvent): void {
+    keysPressed.delete(e.code);
+    keysPressed.delete(e.key);
+  }
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+
   function frame(centerX: number, centerZ: number, worldRadius: number): void {
     controls.target.set(centerX, 0, centerZ);
-    // Deliberately well inside worldRadius (which also sizes the sky's hill
-    // backdrop at 1.42x-2.6x that same radius, see world/sky.ts) so the
-    // camera looks down and across the terrain with hills receding beyond
-    // it, rather than sitting among the first hill ring.
     const distance = Math.max(controls.minDistance, worldRadius * 0.85);
     camera.position.copy(ISO_DIRECTION).multiplyScalar(distance).add(controls.target);
     controls.update();
   }
 
+  const forwardScratch = new Vector3();
+  const rightScratch = new Vector3();
+  const moveVector = new Vector3();
+
+  function update(deltaSeconds: number): void {
+    if (keysPressed.size === 0) return;
+
+    const distance = camera.position.distanceTo(controls.target);
+    // Pan speed scales with distance so keyboard movement feels natural at any zoom
+    const panSpeed = Math.max(120, distance * 0.85) * deltaSeconds;
+
+    forwardScratch.set(
+      controls.target.x - camera.position.x,
+      0,
+      controls.target.z - camera.position.z,
+    );
+    if (forwardScratch.lengthSq() > 0.0001) {
+      forwardScratch.normalize();
+    }
+    rightScratch.crossVectors(forwardScratch, new Vector3(0, 1, 0)).normalize();
+
+    moveVector.set(0, 0, 0);
+
+    // Forward (^, ArrowUp, W) / Backward (v, ArrowDown, S)
+    if (keysPressed.has("ArrowUp") || keysPressed.has("KeyW") || keysPressed.has("^")) {
+      moveVector.addScaledVector(forwardScratch, panSpeed);
+    }
+    if (keysPressed.has("ArrowDown") || keysPressed.has("KeyS") || keysPressed.has("v")) {
+      moveVector.addScaledVector(forwardScratch, -panSpeed);
+    }
+
+    // Left (<, ArrowLeft, A, ,) / Right (>, ArrowRight, D, .)
+    if (keysPressed.has("ArrowLeft") || keysPressed.has("KeyA") || keysPressed.has("<") || keysPressed.has(",")) {
+      moveVector.addScaledVector(rightScratch, -panSpeed);
+    }
+    if (keysPressed.has("ArrowRight") || keysPressed.has("KeyD") || keysPressed.has(">") || keysPressed.has(".")) {
+      moveVector.addScaledVector(rightScratch, panSpeed);
+    }
+
+    if (moveVector.lengthSq() > 0) {
+      controls.target.add(moveVector);
+      camera.position.add(moveVector);
+    }
+
+    // Zoom In (+, PageUp, E) / Zoom Out (-, PageDown, Q)
+    const zoomSpeed = Math.max(150, distance * 1.2) * deltaSeconds;
+    if (
+      keysPressed.has("Equal") ||
+      keysPressed.has("+") ||
+      keysPressed.has("NumpadAdd") ||
+      keysPressed.has("PageUp") ||
+      keysPressed.has("KeyE")
+    ) {
+      const newDist = Math.max(controls.minDistance, distance - zoomSpeed);
+      const dir = camera.position.clone().sub(controls.target).normalize();
+      camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    }
+
+    if (
+      keysPressed.has("Minus") ||
+      keysPressed.has("-") ||
+      keysPressed.has("NumpadSubtract") ||
+      keysPressed.has("PageDown") ||
+      keysPressed.has("KeyQ")
+    ) {
+      const newDist = Math.min(controls.maxDistance, distance + zoomSpeed);
+      const dir = camera.position.clone().sub(controls.target).normalize();
+      camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    }
+  }
+
   function dispose(): void {
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
     controls.dispose();
   }
 
-  return { camera, controls, frame, dispose };
+  return { camera, controls, frame, update, dispose };
 }
+

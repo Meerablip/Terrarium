@@ -51,6 +51,16 @@ export function initRender3DSelection(
     if (!anchor) return;
     selectedId = id;
     statPanel.show(id);
+
+    // If the camera is currently zoomed far out (e.g. initial bird's-eye view),
+    // bring the camera closer so the selected citizen and nearby 3D details are clearly visible.
+    const currentDist = camera.position.distanceTo(controls.target);
+    if (currentDist > 350) {
+      const dir = camera.position.clone().sub(controls.target).normalize();
+      controls.target.copy(anchor.position);
+      camera.position.copy(anchor.position).addScaledVector(dir, 220);
+      controls.update();
+    }
   }
 
   function deselectCitizen(): void {
