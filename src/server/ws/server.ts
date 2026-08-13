@@ -9,6 +9,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { World } from "../../sim/world.ts";
 import type { WireSnapshotV1 } from "../../shared/wireFormat.ts";
 import { BROADCAST_HZ } from "../constants.ts";
+import { HOME_COMPLETE_THRESHOLD } from "../../sim/constants.ts";
 
 /** Reads the render-relevant slice of World into a plain, wire-shaped
  * object. Reads the flattened top-level CitizenStore aliases
@@ -44,6 +45,7 @@ export function buildWireSnapshot(world: World): WireSnapshotV1 {
     x: h.x,
     y: h.y,
     complete: h.complete,
+    buildProgress: Math.min(h.buildProgress / HOME_COMPLETE_THRESHOLD, 1),
   }));
 
   const settlements: WireSnapshotV1["settlements"] = Array.from(world.settlements.settlements.values()).map(

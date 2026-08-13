@@ -1,23 +1,21 @@
-// Composition root. Wires the renderer and UI together and renders whatever
-// state arrives over the WebSocket connection to the world server — this
-// file no longer calls tick() anywhere; the simulation lives entirely on
-// the server now (see src/server/). Same sim/render split as before, just
-// stretched across the network: this file's job is purely "take the latest
-// snapshot, hand its fields to the render/UI layers."
+// Composition root. Wires the 3D renderer and UI together and renders
+// whatever state arrives over the WebSocket connection to the world
+// server — same sim/render split as before, just a different renderer.
+//
+// Phases 1-2 of the render3d cutover (see the implementation plan): sky,
+// data-driven terrain, primitive citizens/homes/materials, camera pan/
+// orbit/zoom, and smooth citizen movement (steer-toward-target between
+// snapshots). No selection, no settlement markers/labels, no night cycle,
+// no fire yet — those are later phases. The old Pixi renderer's files
+// (src/render/*.ts) and its dependencies stay in the tree untouched for
+// now, per the plan's rollback-safety guidance; nothing here imports them
+// anymore.
 
-import { CELL_SIZE, GRID_COLS, GRID_ROWS } from "./sim/constants.ts";
-import { createPixiApp } from "./render/app.ts";
-import { createViewport } from "./render/viewportSetup.ts";
-import { createTerrainLayer, updateTerrainLayer } from "./render/terrainLayer.ts";
-import { createCitizenLayer, syncCitizenLayer } from "./render/citizenLayer.ts";
-import { createMaterialLayer, syncMaterialLayer } from "./render/materialLayer.ts";
-import { createHomeLayer, syncHomeLayer } from "./render/homeLayer.ts";
-import { createSettlementLayer, syncSettlementLayer } from "./render/settlementLayer.ts";
-import { onViewModeChange } from "./render/viewMode.ts";
-import { initSelection } from "./render/selection.ts";
-import { createStatPanel } from "./ui/statPanel.ts";
-import { createSettlementLabelOverlay, repositionSettlementLabels, syncSettlementLabelOverlay } from "./ui/settlementLabels.ts";
-import { connectToServer, type ClientWorldState } from "./net/socket.ts";
+import { createRender3DApp } from "./render3d/app.ts";
+import { createRender3DCamera } from "./render3d/camera.ts";
+import { render3DWorldOptionsFromSimConstants } from "./render3d/snapshotAdapter.ts";
+import { createRender3DWorld } from "./render3d/world/engine.ts";
+import { connectToServer } from "./net/socket.ts";
 
 const WS_URL = `ws://${location.hostname}:8080`;
 
@@ -25,81 +23,38 @@ async function main(): Promise<void> {
   const appParent = document.getElementById("app");
   if (!appParent) throw new Error("Missing #app element in index.html");
 
-  const app = await createPixiApp(appParent);
+  const options = render3DWorldOptionsFromSimConstants();
+  const world = createRender3DWorld(options);
 
-  // World dimensions are fixed by sim constants, not something we need to
-  // wait for the first server message to learn.
-  const worldWidth = GRID_COLS * CELL_SIZE;
-  const worldHeight = GRID_ROWS * CELL_SIZE;
-  const viewport = createViewport(app, worldWidth, worldHeight);
+  const app = createRender3DApp(appParent, world.palette.fog);
+  app.scene.add(world.group);
 
-  // Ground-view layers, added in fixed z-order: terrain (under everything),
-  // then materials, then homes, then citizens (on top).
-  const terrainLayer = createTerrainLayer({ cols: GRID_COLS, rows: GRID_ROWS, cellSize: CELL_SIZE, resource: [], capacity: [], pathWear: [] });
-  viewport.addChild(terrainLayer);
+  const camera = createRender3DCamera(app.canvas, options.worldWidth, options.worldHeight);
+  camera.frame(options.worldWidth / 2, options.worldHeight / 2, world.worldRadius);
 
-  const materialLayer = createMaterialLayer();
-  viewport.addChild(materialLayer.container);
-
-  const homeLayer = createHomeLayer();
-  viewport.addChild(homeLayer.container);
-
-  const citizenLayer = createCitizenLayer();
-  viewport.addChild(citizenLayer.container);
-
-  // Map-view-only layer, also added to the viewport so it pans/zooms with
-  // the world; visibility toggled by the view-mode subscription below.
-  const settlementLayer = createSettlementLayer();
-  viewport.addChild(settlementLayer);
-
-  const settlementLabelOverlay = createSettlementLabelOverlay();
-
-  // selection and statPanel each need a handle to the other (selection
-  // shows/hides the panel; the panel's "stop following" button and its
-  // dead-target callback both need to call back into deselectCitizen).
-  // Break the cycle with a forwarding closure: statPanel is created first
-  // with a callback that forwards to selection once selection exists.
-  let deselect = () => {};
-  const statPanel = createStatPanel(() => deselect());
-  const selection = initSelection(viewport, citizenLayer, statPanel);
-  deselect = () => selection.deselectCitizen();
-
-  let latestState: ClientWorldState | null = null;
-
-  onViewModeChange(viewport, (mode) => {
-    citizenLayer.container.visible = mode === "ground";
-    materialLayer.container.visible = mode === "ground";
-    homeLayer.container.visible = mode === "ground";
-    settlementLayer.visible = mode === "map";
-    if (latestState) {
-      syncSettlementLabelOverlay(settlementLabelOverlay, latestState.settlements, viewport, mode);
-    }
-  });
-
+  // Phase 3 wires latestState into selection/statPanel/settlementLabels; for
+  // now applySnapshot is the only consumer of each incoming snapshot.
   connectToServer(WS_URL, (state) => {
-    latestState = state;
-
-    syncCitizenLayer(citizenLayer, state.citizens, (id) => selection.selectCitizen(id));
-    syncMaterialLayer(materialLayer, state.materials);
-    syncHomeLayer(homeLayer, state.homes);
-    updateTerrainLayer(terrainLayer, state.terrain, state.weather);
-    syncSettlementLayer(settlementLayer, state.settlements, state.terrain);
-
-    const mode = settlementLayer.visible ? "map" : "ground";
-    syncSettlementLabelOverlay(settlementLabelOverlay, state.settlements, viewport, mode);
-
-    const selectedId = selection.getSelectedId();
-    if (selectedId !== null) {
-      const citizen = state.citizens.find((c) => c.id === selectedId);
-      statPanel.update(citizen);
-    }
+    world.applySnapshot(state);
   });
 
-  // Pure screen-space math, no sim coupling — stays on the render loop so
-  // labels track smoothly while panning/zooming between server snapshots.
-  app.ticker.add(() => {
-    repositionSettlementLabels(settlementLabelOverlay, viewport);
-  });
+  // Real elapsed time between frames, not a hardcoded 1/60 — rAF doesn't
+  // guarantee 60fps, and citizens.ts's capped-speed steering needs the
+  // actual delta or visual movement speed drifts from STEER_SPEED whenever
+  // the frame rate isn't exactly 60. Clamped to avoid a huge step after a
+  // backgrounded-tab pause (mirrors kuku's own clamp in engine.ts).
+  let lastFrameMs: number | null = null;
+  function frame(nowMs: number): void {
+    const nowSeconds = nowMs / 1000;
+    const deltaSeconds = lastFrameMs === null ? 1 / 60 : Math.min((nowMs - lastFrameMs) / 1000, 0.12);
+    lastFrameMs = nowMs;
+
+    world.update(nowSeconds, deltaSeconds);
+    camera.controls.update();
+    app.render(camera.camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 }
 
 main().catch((err) => {

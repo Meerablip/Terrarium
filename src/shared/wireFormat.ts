@@ -44,6 +44,11 @@ export interface WireSnapshotV1 {
     x: number;
     y: number;
     complete: boolean;
+    /** buildProgress / HOME_COMPLETE_THRESHOLD, clamped to [0, 1]. The sim's
+     * underlying accumulator keeps climbing past the threshold (deposits
+     * don't stop once a home completes), so this is a normalized ratio for
+     * rendering a fill bar, not the raw value. */
+    buildProgress: number;
   }>;
 
   settlements: Array<{
