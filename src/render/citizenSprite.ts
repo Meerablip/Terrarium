@@ -1,33 +1,49 @@
-// Builds a single citizen triangle. Geometry is drawn once and never
-// redrawn — only its Container transform (position/rotation) changes per
-// tick, which is far cheaper than reissuing Graphics path commands for
-// hundreds of entities every tick.
+// A single citizen's animated sprite, plus the heading -> facing-direction
+// mapping.
+//
+// Player.png only carries four discrete facing directions, so a citizen's
+// continuous `heading` (radians, atan2(dy,dx) — see
+// sim/systems/visionMovementHarvest.ts) is bucketed into the nearest cardinal
+// rather than used as a rotation. Rotating a top-down character sprite would
+// look wrong regardless; these sheets are drawn to be viewed upright.
+//
+// World y maps directly to screen y with no flip (both increase downward in
+// Pixi), so +y is "down" on screen and the mapping is direct.
 
-import { Graphics } from "pixi.js";
-import { CELL_SIZE } from "../sim/constants.ts";
-import { INK_COLOR } from "./colors.ts";
+import { AnimatedSprite } from "pixi.js";
 
-// Triangle sized relative to the terrain cell so it reads clearly without
-// dominating the terrain texture at default zoom.
-const TRIANGLE_LENGTH = CELL_SIZE * 0.6;
-const TRIANGLE_HALF_WIDTH = CELL_SIZE * 0.28;
+import { getPlayerWalkFrames, type Direction } from "./assets.ts";
 
-export function createTriangle(): Graphics {
-  const g = new Graphics();
+/** Seconds per walk frame at the reference speed. Actual playback rate is
+ * scaled by how fast the citizen is really moving (see citizenLayer), so gait
+ * matches travel instead of every citizen shuffling at an identical cadence
+ * regardless of speed — which matters here because `speed` is an evolved,
+ * per-citizen trait with real spread across the population. */
+export const WALK_FRAME_SECONDS = 0.12;
 
-  // Isoceles triangle centered on its own origin, pointing along local +x,
-  // so `rotation = heading` (radians, 0 = facing +x) needs no extra offset.
-  g.moveTo(TRIANGLE_LENGTH * 0.6, 0)
-    .lineTo(-TRIANGLE_LENGTH * 0.4, TRIANGLE_HALF_WIDTH)
-    .lineTo(-TRIANGLE_LENGTH * 0.4, -TRIANGLE_HALF_WIDTH)
-    .closePath()
-    .fill(INK_COLOR);
+export function headingToDirection(heading: number): Direction {
+  // Normalise to (-pi, pi], then split into four quadrants centred on each
+  // cardinal: right at 0, down at +pi/2, up at -pi/2, left at +-pi.
+  const a = Math.atan2(Math.sin(heading), Math.cos(heading));
+  if (a > -Math.PI / 4 && a <= Math.PI / 4) return "right";
+  if (a > Math.PI / 4 && a <= (3 * Math.PI) / 4) return "down";
+  if (a > (3 * Math.PI) / 4 || a <= -(3 * Math.PI) / 4) return "left";
+  return "up";
+}
 
-  // Pixi 8's federated event system: eventMode replaces the old `interactive`
-  // boolean. Hit-testing uses the Graphics' own fill bounds — sufficient at
-  // this small triangle size, no custom hitArea needed.
-  g.eventMode = "static";
-  g.cursor = "pointer";
+export function createCitizenSprite(): AnimatedSprite {
+  const sprite = new AnimatedSprite({
+    textures: getPlayerWalkFrames("down"),
+    autoPlay: false, // driven manually so frame rate can follow real speed
+    autoUpdate: false,
+  });
 
-  return g;
+  // Anchor at the feet, not the centre: a top-down character's ground
+  // position is where it stands, and y-sorting only reads correctly when the
+  // sort key matches the contact point with the ground.
+  sprite.anchor.set(0.5, 0.9);
+
+  sprite.eventMode = "static";
+  sprite.cursor = "pointer";
+  return sprite;
 }

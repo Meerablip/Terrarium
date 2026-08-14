@@ -6,7 +6,10 @@
 // binding for all future work, not just this pass. See v1.ts for a worked
 // (illustrative, not real) example of the pattern.
 
-export const CURRENT_SNAPSHOT_VERSION = 1;
+import { migrateV1ToV2 } from "./v1.ts";
+import { migrateV2ToV3 } from "./v2.ts";
+
+export const CURRENT_SNAPSHOT_VERSION = 3;
 
 /** A migration transforms a v(N) raw object into a v(N+1) raw object.
  * Deliberately untyped (`unknown -> unknown`) rather than typed against
@@ -16,11 +19,10 @@ export const CURRENT_SNAPSHOT_VERSION = 1;
 export type Migration = (old: unknown) => unknown;
 
 /** Keyed by the version a migration runs FROM. migrations[1] is "the
- * function that turns a v1 payload into a v2 payload," registered once a v2
- * shape actually exists. Empty today — there is only one snapshot version
- * so far, so there is nothing to migrate from yet. */
+ * function that turns a v1 payload into a v2 payload." */
 const migrations: Record<number, Migration> = {
-  // 1: migrateV1ToV2,
+  1: migrateV1ToV2,
+  2: migrateV2ToV3,
 };
 
 /**

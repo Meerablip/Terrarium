@@ -134,6 +134,43 @@ export interface SnapshotV1 {
   };
 }
 
+/**
+ * v2 — Phase 3 (evolution). Adds the three lineage columns to the citizen
+ * store. Everything else is byte-identical to v1, expressed here as a delta
+ * against SnapshotV1 rather than a copied-out full interface so the two
+ * versions can't silently drift apart in the parts that didn't change.
+ *
+ * Note that no *gene* columns are added: visionRadius/speed/metabolismRate
+ * already existed in v1 (they were stored, just never varied). What v2 adds
+ * is the ability to say where a citizen came from — see ../migrations/v1.ts
+ * for how existing worlds are brought forward.
+ */
+export interface SnapshotV2 extends Omit<SnapshotV1, "v" | "citizens"> {
+  v: 2;
+  citizens: Omit<SnapshotV1["citizens"], "fields"> & {
+    fields: SnapshotV1["citizens"]["fields"] & {
+      generation: number[];
+      birthTick: number[];
+      parentId: number[];
+    };
+  };
+}
+
+/**
+ * v3 — decorative ponds. Adds `terrain.isWater`, a flat row-major 0/1 mask
+ * the client needs to render water where the sim already zeroed out
+ * resource/capacity (see generatePonds in ../../sim/terrain.ts). Everything
+ * else is byte-identical to v2. A pre-v3 world has no recorded pond — see
+ * ../migrations/v2.ts, which backfills an all-zero (no water) mask rather
+ * than guessing where one might have gone.
+ */
+export interface SnapshotV3 extends Omit<SnapshotV2, "v" | "terrain"> {
+  v: 3;
+  terrain: SnapshotV2["terrain"] & {
+    isWater: number[];
+  };
+}
+
 /** The current, canonical snapshot shape. Bump this (and add a migration —
- * see ../migrations/) any time SnapshotV1's shape changes. */
-export type CurrentSnapshot = SnapshotV1;
+ * see ../migrations/) any time the shape changes. */
+export type CurrentSnapshot = SnapshotV3;

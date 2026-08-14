@@ -83,9 +83,9 @@ export function tick(world: World): void {
   // 6. Harvest (resolves post-move every tick, independent of decide cadence)
   harvestAtCurrentCell(citizens, terrain);
 
-  // 7. Reproduction
+  // 7. Reproduction (mutates the child's genome — needs the seeded rng)
   const pendingSpawns: SpawnRequest[] = [];
-  applyReproduction(citizens, pendingSpawns);
+  applyReproduction(citizens, pendingSpawns, rng);
 
   // 8. Apply deferred structural changes: deaths, then spawns, then material
   //    depletions, then home events.
@@ -99,11 +99,19 @@ export function tick(world: World): void {
     }
   }
   for (const req of pendingSpawns) {
-    const id = spawnCitizen(citizens, req.x, req.y, req.heading, req.resource, {
-      visionRadius: req.visionRadius,
-      speed: req.speed,
-      metabolismRate: req.metabolismRate,
-    });
+    const id = spawnCitizen(
+      citizens,
+      req.x,
+      req.y,
+      req.heading,
+      req.resource,
+      {
+        visionRadius: req.visionRadius,
+        speed: req.speed,
+        metabolismRate: req.metabolismRate,
+      },
+      { generation: req.generation, birthTick: world.tick, parentId: req.parentId },
+    );
     const slot = citizens.idToSlot.get(id)!;
     citizens.decideCountdown[slot] = randInt(rng, 1, DECIDE_INTERVAL_TICKS);
   }

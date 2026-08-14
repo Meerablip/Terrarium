@@ -23,11 +23,14 @@ describe("headless simulation", () => {
     const world = createWorld({ seed: 7 });
     for (let i = 0; i < 100; i++) tick(world);
 
-    const { resource, capacity } = world.terrain;
+    const { resource, capacity, isWater } = world.terrain;
     for (let i = 0; i < resource.length; i++) {
       expect(resource[i]).toBeGreaterThanOrEqual(0);
       expect(resource[i]).toBeLessThanOrEqual(capacity[i]);
-      expect(capacity[i]).toBe(TERRAIN_BASE_CAPACITY);
+      // Every cell shares the uniform base capacity, except a pond cell —
+      // generatePonds deliberately zeroes both (see sim/terrain.ts) so
+      // nothing grows in the water.
+      expect(capacity[i]).toBe(isWater[i] ? 0 : TERRAIN_BASE_CAPACITY);
     }
   });
 
@@ -52,11 +55,24 @@ describe("headless simulation", () => {
     }
   });
 
-  it("clamps resource at the reproduction threshold once population is capped, instead of growing unbounded", () => {
+  it("bounds population by ecological scarcity rather than the MAX_POPULATION rail", () => {
     const world = createWorld({ seed: 5, initialPopulation: 50 });
     for (let i = 0; i < 500; i++) tick(world);
 
-    expect(world.citizens.count).toBe(MAX_POPULATION);
+    // This assertion is deliberately the inverse of what it used to be. The
+    // old test asserted the population reached MAX_POPULATION exactly — the
+    // world saturating at the cap and sitting there. That state is actively
+    // anti-evolutionary: at the cap, reproduction.ts skips reproduction and
+    // clamps resource, so the fittest citizen cannot out-reproduce the least
+    // fit and selection switches off entirely. MAX_POPULATION is now a
+    // safety rail sized well above the food supply's carrying capacity, and
+    // scarcity is what's supposed to bound growth.
+    expect(world.citizens.count).toBeGreaterThan(50); // scarcity isn't so harsh nothing survives
+    expect(world.citizens.count).toBeLessThan(MAX_POPULATION); // ...but ecology, not the rail, is the ceiling
+
+    // Still true, and still worth guarding: harvest runs before reproduction
+    // within a tick, so any citizen over the threshold reproduces (halving
+    // its resource) in the same tick rather than accumulating without bound.
     for (let slot = 0; slot < world.citizens.count; slot++) {
       expect(world.citizens.resource[slot]).toBeLessThanOrEqual(REPRODUCTION_THRESHOLD);
     }

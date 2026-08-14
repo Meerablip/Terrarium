@@ -73,6 +73,7 @@ export function buildWireSnapshot(world: World): WireSnapshotV1 {
       resource: Array.from(world.terrain.resource),
       capacity: Array.from(world.terrain.capacity),
       pathWear: Array.from(world.terrain.pathWear),
+      isWater: Array.from(world.terrain.isWater),
     },
     weather: {
       active: world.weather.active,

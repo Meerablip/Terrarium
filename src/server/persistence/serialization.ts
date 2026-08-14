@@ -1,11 +1,10 @@
-// World <-> SnapshotV1 conversion. serializeWorld turns the live, typed-array-
+// World <-> SnapshotV3 conversion. serializeWorld turns the live, typed-array-
 // and Map/Set-backed World into a plain JSON-safe object for SQLite storage;
 // deserializeWorld does the reverse. deserializeWorld always operates on
-// current-version (SnapshotV1) data — any version bridging happens strictly
+// current-version (SnapshotV3) data — any version bridging happens strictly
 // inside the migration chain (../migrations/) before this file is ever
 // called, so this file never needs to reason about old shapes.
 
-import { GRID_COLS, GRID_ROWS } from "../../sim/constants.ts";
 import { createCitizenStore, type CitizenStore } from "../../sim/ecs/store.ts";
 import { createMaterialStore, type MaterialStore } from "../../sim/ecs/materialStore.ts";
 import { createRng } from "../../sim/rng.ts";
@@ -14,28 +13,28 @@ import type { HomeRegistry } from "../../sim/homes.ts";
 import type { SettlementRegistry } from "../../sim/systems/settlements.ts";
 import type { WeatherState } from "../../sim/weather.ts";
 import type { World } from "../../sim/world.ts";
-import type { SnapshotV1 } from "./types.ts";
+import type { SnapshotV3 } from "./types.ts";
 
 /**
- * Turns a live World into a plain JSON-safe SnapshotV1. Serializes citizen
+ * Turns a live World into a plain JSON-safe SnapshotV3. Serializes citizen
  * fields via `world.citizens.fields`, never the flattened top-level aliases
  * (`world.citizens.x` etc.) — those are the SAME array references as
  * `.fields.x` (see store.ts's Object.assign flattening shim), so reading
  * through `.fields` is the one unambiguous, non-duplicating source of truth
  * for "what are the schema-defined per-citizen scalars."
  */
-export function serializeWorld(world: World): SnapshotV1 {
+export function serializeWorld(world: World): SnapshotV3 {
   const citizenFieldEntries = Object.entries(world.citizens.fields) as [
-    keyof SnapshotV1["citizens"]["fields"],
+    keyof SnapshotV3["citizens"]["fields"],
     ArrayLike<number>,
   ][];
-  const citizenFields = {} as SnapshotV1["citizens"]["fields"];
+  const citizenFields = {} as SnapshotV3["citizens"]["fields"];
   for (const [key, arr] of citizenFieldEntries) {
     citizenFields[key] = Array.from(arr);
   }
 
   return {
-    v: 1,
+    v: 3,
     tick: world.tick,
     rngState: world.rng.getState(),
 
@@ -46,6 +45,7 @@ export function serializeWorld(world: World): SnapshotV1 {
       resource: Array.from(world.terrain.resource),
       capacity: Array.from(world.terrain.capacity),
       pathWear: Array.from(world.terrain.pathWear),
+      isWater: Array.from(world.terrain.isWater),
     },
 
     citizens: {
@@ -94,13 +94,13 @@ export function serializeWorld(world: World): SnapshotV1 {
 }
 
 /**
- * Rebuilds a live World from a current-version SnapshotV1. Reconstructs
+ * Rebuilds a live World from a current-version SnapshotV3. Reconstructs
  * idToSlot (both stores) by iterating id[0..count) — it's never persisted,
  * only derived. Reallocates settlementCellPopScratch and
  * terrain.homeBoostScratch fresh (zero information loss: both are fully
  * rebuilt from other state on every tick/call, never meant to persist).
  */
-export function deserializeWorld(snap: SnapshotV1): World {
+export function deserializeWorld(snap: SnapshotV3): World {
   const terrain: TerrainGrid = {
     cols: snap.terrain.cols,
     rows: snap.terrain.rows,
@@ -109,6 +109,7 @@ export function deserializeWorld(snap: SnapshotV1): World {
     capacity: Float32Array.from(snap.terrain.capacity),
     pathWear: Float32Array.from(snap.terrain.pathWear),
     homeBoostScratch: new Float32Array(snap.terrain.cols * snap.terrain.rows),
+    isWater: Uint8Array.from(snap.terrain.isWater),
   };
 
   const citizens: CitizenStore = createCitizenStore(snap.citizens.capacity);
@@ -174,7 +175,12 @@ export function deserializeWorld(snap: SnapshotV1): World {
     homes,
     weather,
     settlements,
-    settlementCellPopScratch: new Uint16Array(GRID_COLS * GRID_ROWS),
+    // Sized from the SNAPSHOT's terrain dims, not the GRID_COLS/GRID_ROWS
+    // constants: world size is configurable, so a world saved at a
+    // non-default size would otherwise come back with a mismatched scratch
+    // buffer — too small (out-of-bounds writes in the settlement clustering
+    // pass) or needlessly large.
+    settlementCellPopScratch: new Uint16Array(snap.terrain.cols * snap.terrain.rows),
     tick: snap.tick,
     rng,
   };

@@ -37,11 +37,22 @@ const CITIZEN_SCHEMA = {
   resource: Float32Array,
   age: Uint32Array,
 
-  // Traits (rule 10): identical fixed values this phase, but real per-citizen
-  // columns so future evolvability is additive, not a refactor.
+  // Genome (see ../traits.ts). visionRadius/speed are heritable and mutate on
+  // reproduction; metabolismRate is DERIVED from them and cached here so the
+  // hot metabolism loop reads a flat array instead of recomputing a cost
+  // function for every citizen every tick.
   visionRadius: Float32Array,
   speed: Float32Array,
   metabolismRate: Float32Array,
+
+  // Lineage. Not read by any simulation rule — this is telemetry, and it's
+  // load-bearing for exactly one thing: being able to tell real adaptation
+  // apart from neutral drift. Without generation/birthTick you cannot plot a
+  // trait mean against generation number, and "is it evolving?" stays an
+  // opinion rather than a measurement.
+  generation: Uint32Array, // 0 for founding citizens, parent's + 1 otherwise
+  birthTick: Uint32Array,
+  parentId: Int32Array, // -1 for founding citizens
 
   // Decide/Move cache: this tick's chosen destination (distinct from Memory,
   // which is *remembered past payoffs* — see components.ts).
@@ -111,6 +122,7 @@ export function spawnCitizen(
   heading: number,
   resource: number,
   traits?: { visionRadius: number; speed: number; metabolismRate: number },
+  lineage?: { generation: number; birthTick: number; parentId: number },
 ): EntityId {
   const wasAtCapacity = store.count >= store.capacity;
   const id = spawnEntity(store, {
@@ -122,6 +134,11 @@ export function spawnCitizen(
     visionRadius: traits?.visionRadius ?? 0,
     speed: traits?.speed ?? 0,
     metabolismRate: traits?.metabolismRate ?? 0,
+    generation: lineage?.generation ?? 0,
+    birthTick: lineage?.birthTick ?? 0,
+    // -1 ("no parent") is the meaningful default: a citizen spawned without
+    // explicit lineage is a founder, not the child of entity 0.
+    parentId: lineage?.parentId ?? -1,
     targetX: 0,
     targetY: 0,
     hasTarget: 0,

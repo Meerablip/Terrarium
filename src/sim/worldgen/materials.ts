@@ -11,13 +11,23 @@
 import { MATERIAL_COUNT, MATERIAL_KIND_COUNT, MATERIAL_QTY_MAX, MATERIAL_QTY_MIN } from "../constants.ts";
 import { createMaterialStore, spawnMaterial, type MaterialStore } from "../ecs/materialStore.ts";
 import { randInt, randRange, type Rng } from "../rng.ts";
+import { isWaterAt, type TerrainGrid } from "../terrain.ts";
 
-export function generateMaterials(worldWidth: number, worldHeight: number, rng: Rng): MaterialStore {
+export function generateMaterials(terrain: TerrainGrid, rng: Rng): MaterialStore {
+  const worldWidth = terrain.cols * terrain.cellSize;
+  const worldHeight = terrain.rows * terrain.cellSize;
   const store = createMaterialStore(Math.max(MATERIAL_COUNT * 2, 32));
 
   for (let i = 0; i < MATERIAL_COUNT; i++) {
-    const x = randRange(rng, 0, worldWidth);
-    const y = randRange(rng, 0, worldHeight);
+    // Bounded resample away from water — see world.ts's randomLandPosition
+    // for why a small fixed cap is enough in practice.
+    let x = 0;
+    let y = 0;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      x = randRange(rng, 0, worldWidth);
+      y = randRange(rng, 0, worldHeight);
+      if (!isWaterAt(terrain, x, y)) break;
+    }
     const kind = randInt(rng, 0, MATERIAL_KIND_COUNT - 1);
     const quantity = randRange(rng, MATERIAL_QTY_MIN, MATERIAL_QTY_MAX);
     spawnMaterial(store, x, y, kind, quantity);

@@ -1,56 +1,69 @@
-// Placeholder documenting the migration pattern for the first REAL future
-// migration. There is nothing to migrate from yet — SnapshotV1 is the only
-// version that has ever existed — so nothing here is registered in
-// index.ts's `migrations` map. This file exists purely so the pattern is
-// visible and easy to copy when phase 3 (or any future phase) adds a new
-// field to the sim.
+// The real v1 -> v2 migration (Phase 3, evolution). Keyed FROM v1: this is
+// the function to run when you're holding a v1 payload. Registered in
+// index.ts under key `1`.
 //
-// WORKED EXAMPLE (illustrative only — do not uncomment/register this as
-// real logic; it's fictional). Imagine Phase 2's citizen traits/memory/
-// carrying fields had been added to CITIZEN_SCHEMA *after* a v1 snapshot
-// format already existed without them. The migration that upgrades an old
-// v1 payload to the new v2 shape would look like this:
+// Two distinct jobs, and the second one is the subtle one:
 //
-// import { VISION_RADIUS, MOVE_SPEED, METABOLISM_RATE, MEMORY_CAPACITY } from "../../sim/constants.ts";
+//  1. Add the lineage columns (generation/birthTick/parentId), which simply
+//     didn't exist in v1. Existing citizens are treated as founders — there
+//     is no way to reconstruct a parentage graph that was never recorded,
+//     and inventing one would be worse than admitting it's unknown.
 //
-// function migrateV1ToV2(old: unknown): unknown {
-//   const snap = old as {
-//     v: 1;
-//     citizens: { count: number; fields: Record<string, number[]> };
-//     [key: string]: unknown;
-//   };
-//   const count = snap.citizens.count;
-//   return {
-//     ...snap,
-//     v: 2,
-//     citizens: {
-//       ...snap.citizens,
-//       fields: {
-//         ...snap.citizens.fields,
-//         // Every genuinely new field gets an explicit, sim-rule-informed
-//         // default — the same defaults createWorld() itself uses for
-//         // freshly-spawned citizens, so migrated old citizens become
-//         // indistinguishable from ones simulated with the new fields from
-//         // birth.
-//         visionRadius: new Array(count).fill(VISION_RADIUS),
-//         speed: new Array(count).fill(MOVE_SPEED),
-//         metabolismRate: new Array(count).fill(METABOLISM_RATE),
-//         carryingKind: new Array(count).fill(-1), // "not carrying" sentinel
-//         carryingQty: new Array(count).fill(0),
-//         activity: new Array(count).fill(0), // default/idle activity enum value
-//         gatherCountdown: new Array(count).fill(0),
-//         memCount: new Array(count).fill(0),
-//         memWriteIdx: new Array(count).fill(0),
-//       },
-//       memX: new Array(count * MEMORY_CAPACITY).fill(0),
-//       memY: new Array(count * MEMORY_CAPACITY).fill(0),
-//     },
-//   };
-// }
-//
-// This proves the pattern: every untouched field passes through via spread,
-// every new field gets an explicit default, and the function is named and
-// keyed unambiguously to the version transition it performs
-// (migrateV1ToV2, registered under key `1` in index.ts's `migrations` map
-// since it's "the migration to run when you're holding a v1 payload").
-export {};
+//  2. RECOMPUTE metabolismRate from each citizen's genome. In v1 metabolism
+//     was a flat global constant (0.3 for everyone) and the per-citizen
+//     column, while present, was never read by any system. In v2 it is a
+//     derived cost — see ../../sim/traits.ts — and metabolism.ts now reads it
+//     every tick. Passing the stale flat 0.3 through unchanged would leave
+//     migrated citizens permanently mispriced relative to their own traits
+//     (and relative to every citizen born after the upgrade), quietly
+//     corrupting the selection pressure the whole phase exists to create.
+
+import { deriveMetabolismRate } from "../../sim/traits.ts";
+
+interface V1Payload {
+  v: 1;
+  citizens: {
+    count: number;
+    fields: Record<string, number[]>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export function migrateV1ToV2(old: unknown): unknown {
+  const snap = old as V1Payload;
+  const count = snap.citizens.count;
+  const fields = snap.citizens.fields;
+
+  // v1 always wrote these columns, but guard anyway: a corrupt or
+  // hand-edited payload shouldn't produce NaN upkeep that silently starves
+  // the whole population one tick after load.
+  const visionRadius = fields.visionRadius ?? [];
+  const speed = fields.speed ?? [];
+
+  const metabolismRate = new Array<number>(count);
+  for (let i = 0; i < count; i++) {
+    metabolismRate[i] = deriveMetabolismRate({
+      visionRadius: visionRadius[i] ?? 0,
+      speed: speed[i] ?? 0,
+    });
+  }
+
+  return {
+    ...snap,
+    v: 2,
+    citizens: {
+      ...snap.citizens,
+      fields: {
+        ...fields,
+        metabolismRate,
+        // Pre-existing citizens are founders of the post-upgrade world: no
+        // recorded parent, generation 0, and birthTick 0 (their true birth
+        // tick was never stored either).
+        generation: new Array<number>(count).fill(0),
+        birthTick: new Array<number>(count).fill(0),
+        parentId: new Array<number>(count).fill(-1),
+      },
+    },
+  };
+}

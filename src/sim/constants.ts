@@ -5,9 +5,29 @@
 // ---------------------------------------------------------------------------
 
 // --- World / terrain grid ---
+// Defaults. World dimensions are configurable per-world (see WorldConfig in
+// world.ts) — these are the fallback, not a global truth. Anything sizing a
+// buffer must read the live terrain's own cols/rows, never these constants.
 export const GRID_COLS = 100; // terrain grid width, in cells
 export const GRID_ROWS = 100; // terrain grid height, in cells
 export const CELL_SIZE = 16; // world units per cell edge (world is 1600x1600 units)
+
+// --- Sandbox preset ---
+// A deliberately small world for *observing* agents rather than surveying a
+// map. At the renderer's intended zoom (~30x20 tiles on screen) the default
+// 100x100 grid shows ~2% of the world at a time — you can never follow the
+// same agent twice, which makes "are the agents behaving sensibly?"
+// unanswerable by watching. 40x40 is legible end to end.
+//
+// Note this is NOT just a viewing window: world area is a lever on the
+// fitness landscape. Carrying capacity scales with area x REGROWTH_RATE, and
+// density determines whether spatial traits (visionRadius, speed) pay for
+// themselves at all — at high density food is always adjacent and vision
+// evolves straight to its floor. Expect traits to re-adapt when the world
+// size changes; that's real, not a bug.
+export const SANDBOX_GRID_COLS = 76;
+export const SANDBOX_GRID_ROWS = 56;
+export const SANDBOX_INITIAL_POPULATION = 24;
 
 // --- Terrain generation ---
 export const TERRAIN_BLOB_COUNT = 6; // number of gaussian fertile "blobs" scattered across the map
@@ -19,11 +39,47 @@ export const TERRAIN_NOISE_AMPLITUDE = 0.15; // +/- fraction of capacity added a
 export const TERRAIN_BASE_CAPACITY = 100; // max resource capacity for every cell (uniform ceiling)
 export const TERRAIN_MIN_STARTING_FRACTION = 0.5; // cells start at >= this fraction of their capacity
 
+// --- Ponds (decorative water features, rule N/A — cosmetic, not a sim rule) ---
+// Carved out of terrain AFTER createTerrain returns (see generatePonds in
+// terrain.ts), not as part of blob generation — keeps createTerrain's own rng
+// draw sequence, and therefore every unit test that calls it directly with a
+// fixed seed, completely unaffected. Only createWorld's real pipeline draws
+// ponds. A pond cell's capacity/resource is zeroed, so nothing forages there
+// and citizens have no reason to linger — nothing chases food into the water.
+export const POND_COUNT = 1; // ponds generated per world
+export const POND_RADIUS_CELLS = 5; // approx radius, in cells, before edge jitter
+export const POND_EDGE_JITTER = 1.4; // +/- cells of per-cell noise, so the shoreline isn't a perfect circle
+
 // --- Terrain regrowth (rule 1) ---
-export const REGROWTH_RATE = 0.5; // resource regrown per cell per tick, capped at capacity
+// Sets the world's carrying capacity, and therefore how hard selection bites.
+// At the old 0.5 the map regrew ~5,000 resource/tick against ~120/tick of
+// total consumption — a ~40x surplus, under which literally nothing ever
+// starved and MAX_POPULATION (not ecology) was the only thing bounding the
+// population. That is a static equilibrium, not an evolving one. Tuned down
+// so food is genuinely contested; the equilibrium population that results is
+// an emergent property, not a configured one (see scripts/ tuning runs).
+export const REGROWTH_RATE = 0.009; // resource regrown per cell per tick, capped at capacity
 
 // --- Citizen metabolism (rule 2) ---
-export const METABOLISM_RATE = 0.3; // resource lost per citizen per tick
+// Metabolism is DERIVED from a citizen's traits, not an independent gene —
+// see traits.ts. If it were heritable on its own, evolution would trivially
+// drive it toward zero (a free lunch: same vision and speed, no upkeep) and
+// the trait space would collapse to a single degenerate corner. Deriving it
+// makes vision and speed cost something, which is what turns "bigger is
+// always better" into an actual fitness tradeoff.
+//
+// Calibrated so a citizen at the founding traits (VISION_RADIUS=64,
+// MOVE_SPEED=6) burns ~0.30/tick, matching the old flat METABOLISM_RATE —
+// so baseline behavior is comparable to before the change.
+export const METABOLISM_BASE = 0.1; // upkeep floor, paid regardless of traits
+export const METABOLISM_SPEED_COST = 0.0025; // multiplied by speed^2 (superlinear: fast movement is disproportionately costly)
+// Vision was originally priced at 0.0017/unit, which measured out as
+// dominant: a 20k-tick run drove visionRadius from 64 to 17 and still
+// falling, because at the resulting population density food is always within
+// a cell or two and a wide search radius buys nothing it can't get for free.
+// Repriced so vision is affordable enough to be worth carrying when it does
+// pay off, instead of being a pure tax.
+export const METABOLISM_VISION_COST = 0.0008; // multiplied by visionRadius (linear)
 
 // --- Citizen vision + movement + harvest (rule 3) ---
 export const VISION_RADIUS = 64; // world units; citizens scan cells within this radius
@@ -36,7 +92,14 @@ export const REPRODUCTION_SPLIT_FRACTION = 0.5; // fraction of parent's resource
 
 // --- Population ---
 export const INITIAL_POPULATION = 50; // citizens spawned at world creation
-export const MAX_POPULATION = 400; // hard cap; reproduction is skipped once reached
+// A safety rail against runaway allocation, NOT the intended population
+// bound. It used to be 400 and the world sat pinned at exactly 400 forever,
+// which actively prevented evolution: at the cap, reproduction is skipped
+// and resource is clamped, so the fittest citizen cannot out-reproduce the
+// least fit — the single mechanism selection runs on was disabled. Raised
+// well above the expected ecological equilibrium so REGROWTH_RATE (scarcity)
+// is what actually bounds the population.
+export const MAX_POPULATION = 5000;
 
 // --- Determinism ---
 export const WORLD_SEED = 1337; // seed for terrain gen + initial citizen placement RNG
@@ -65,7 +128,17 @@ export const FORAGE_SURPLUS_THRESHOLD = 50; // min `resource` before switching F
 
 // --- Home / building (rule 4) ---
 export const HOME_COMPLETE_THRESHOLD = 100; // cumulative buildProgress to complete a home
-export const HOME_ATTACH_RADIUS = 20; // world units; join-existing-home-on-deposit threshold
+// world units; join-existing-home-on-deposit threshold. Was 20 (1.25 cells)
+// — tight enough that citizens depositing a few cells apart each founded
+// their own home rather than joining a neighbour's, so a single small
+// population produced dozens of separate one-or-two-member homes packed
+// together. Each stamps its own clearing radius (terrainLayer.ts), so many
+// overlapping tiny homes read as fragmented, jagged bare ground rather than
+// a few clean settlement plots. 80 was a first pass and still measured out
+// to ~60 homes for 230 citizens at the 5-minute mark (headless: 6000 ticks)
+// — still a dense "downtown." 120 nearly halves that (~35 homes, same
+// population) without joins happening across implausible distances.
+export const HOME_ATTACH_RADIUS = 120;
 
 // --- Density/tier classifier + settlements (rule 8) ---
 export const TIER_HUT_MIN = 4; // min population to be classified a hut
@@ -84,8 +157,6 @@ export const AGRICULTURE_MULTIPLIER = 2.0; // regrowth multiplier within that ra
 export const PATH_WEAR_INCREMENT = 0.05; // per occupying citizen per tick
 export const PATH_WEAR_DECAY_RATE = 0.01; // per cell per tick
 export const PATH_WEAR_MAX = 1.0;
-export const PATH_WEAR_TINT_STRENGTH = 0.6; // 0..1, max tint blend at PATH_WEAR_MAX
-export const ROAD_WEAR_THRESHOLD = 0.4; // avg pathWear along a route to render a road in map view
 
 // --- Weather (rule 7) ---
 export const WEATHER_INTERVAL_TICKS = 2000; // avg ticks between weather events
@@ -93,7 +164,42 @@ export const WEATHER_JITTER_TICKS = 400; // +/- random jitter on the interval
 export const WEATHER_DURATION_TICKS = 300; // ticks a weather event stays active
 export const WEATHER_REGION_RADIUS = 20; // world units
 export const WEATHER_MOISTURE_BOOST = 1.8; // regrowth multiplier within the region while active
-export const WEATHER_TINT_STRENGTH = 0.5; // 0..1 tint blend toward green while active
 
-// --- Render view modes (rule 9) ---
-export const MAP_VIEW_ZOOM_THRESHOLD = 0.5; // viewport.scaled below this switches to map view
+// ---------------------------------------------------------------------------
+// Phase 3 — evolution
+//
+// The Darwinian triad is variation + heritability + differential fitness.
+// Heritability already existed (reproduction copies the parent's traits);
+// these constants supply the missing two.
+// ---------------------------------------------------------------------------
+
+// --- Mutation (variation) ---
+// Applied as a proportional gaussian: sigma scales with the trait's own
+// magnitude, so a 64-unit vision and a 6-unit speed mutate at comparable
+// *relative* rates without needing separately tuned absolute sigmas.
+export const MUTATION_SIGMA_FRACTION = 0.08; // std dev as a fraction of the parent's trait value
+
+// Hard bounds. These are not fitness limits (the metabolism cost function
+// already makes extremes expensive) — they exist so a long tail of mutations
+// can't drive a trait negative or absurd, which would break the systems that
+// consume them (a negative visionRadius scans no cells; a huge speed
+// teleports past targets).
+export const VISION_RADIUS_MIN = 8;
+export const VISION_RADIUS_MAX = 220;
+export const MOVE_SPEED_MIN = 0.5;
+export const MOVE_SPEED_MAX = 20;
+
+// --- Senescence (differential fitness over a lifetime) ---
+// Implemented as rising metabolic upkeep with age rather than a random death
+// roll: deterministic (no extra RNG draw per citizen per tick, so the seeded
+// stream stays cheap and reproducible), and it selects for traits that pay
+// off *early* rather than merely surviving. Old citizens burn more and
+// eventually can't out-forage their own upkeep.
+// Onset was originally 15000, which measured out as completely inert: mean
+// realized age in a 20k-tick run was ~1,770, so no citizen ever lived long
+// enough to pay an aging penalty and `age` remained a field nothing acted on.
+// Set below the observed mean lifespan so senescence actually shapes the
+// upper tail rather than being dead configuration.
+export const SENESCENCE_ONSET_TICKS = 1200; // no aging penalty before this age
+export const SENESCENCE_PER_TICK = 0.0002; // added to the metabolism multiplier per tick beyond onset
+export const SENESCENCE_MAX_MULTIPLIER = 4.0; // ceiling, so upkeep can't diverge without bound

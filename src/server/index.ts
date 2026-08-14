@@ -3,6 +3,7 @@
 // is a wiring/hosting task, not a sim redesign; no gameplay logic lives here.
 
 import { createWorld } from "../sim/world.ts";
+import { describeWorldConfig, worldConfigFromEnv } from "../sim/worldPresets.ts";
 import { openDatabase } from "./db/connection.ts";
 import { appendEvents } from "./db/events.ts";
 import { loadLatestSnapshot, writeSnapshot } from "./db/snapshots.ts";
@@ -28,8 +29,11 @@ async function main(): Promise<void> {
     world = deserializeWorld(migrated);
     console.log(`Loaded snapshot at tick ${world.tick} (version ${stored.version}).`);
   } else {
-    world = createWorld();
-    console.log(`No snapshot found — creating a fresh world (seed default), starting at tick 0.`);
+    const worldConfig = worldConfigFromEnv();
+    world = createWorld(worldConfig);
+    console.log(
+      `No snapshot found — creating a fresh world (${describeWorldConfig(worldConfig)}), starting at tick 0.`,
+    );
   }
   setWorld(world);
 

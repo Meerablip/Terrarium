@@ -5,3 +5,9 @@ dist/
 data/
 tsconfig.tsbuildinfo
 .claude/
+
+# Source asset packs kept locally for reference/future variant additions —
+# never committed. The specific files actually used are copied into
+# src/assets/, which IS tracked.
+/Cute_Fantasy_Free/
+/3d assets/

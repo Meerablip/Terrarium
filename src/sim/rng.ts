@@ -48,3 +48,24 @@ export function randInt(rng: Rng, min: number, max: number): number {
 export function gaussianFalloff(dx: number, dy: number, sigma: number): number {
   return Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
 }
+
+/**
+ * Normally-distributed sample via Box-Muller, drawn from the same seeded
+ * stream as every other draw here — so mutation (traits.ts) stays inside the
+ * determinism guarantee this module exists to provide.
+ *
+ * Box-Muller generates two independent normals per call but we deliberately
+ * discard the second rather than caching it: a cached spare would make a
+ * draw's value depend on how many times the function had been called
+ * *before* it, which survives getState()/restoreRng() incorrectly (the spare
+ * lives outside mulberry32's 32-bit state, so a save/restore mid-pair would
+ * resume with the wrong parity). Burning one extra uniform per call keeps
+ * "RNG state is exactly one uint32" true, which persistence depends on.
+ */
+export function randGaussian(rng: Rng, mean: number, stdDev: number): number {
+  // u1 must be nonzero for log(); mulberry32 returns [0,1) so guard the zero.
+  const u1 = 1 - rng();
+  const u2 = rng();
+  const magnitude = Math.sqrt(-2 * Math.log(u1));
+  return mean + stdDev * magnitude * Math.cos(2 * Math.PI * u2);
+}

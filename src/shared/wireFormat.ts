@@ -67,6 +67,9 @@ export interface WireSnapshotV1 {
     resource: number[];
     capacity: number[];
     pathWear: number[];
+    /** 1 where a cell is a pond, 0 elsewhere — static per world, never
+     * changes after generation. See sim/terrain.ts's generatePonds. */
+    isWater: number[];
   };
 
   weather: {

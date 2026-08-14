@@ -14,6 +14,9 @@ import {
   PATH_WEAR_DECAY_RATE,
   PATH_WEAR_INCREMENT,
   PATH_WEAR_MAX,
+  POND_COUNT,
+  POND_EDGE_JITTER,
+  POND_RADIUS_CELLS,
   REGROWTH_RATE,
   TERRAIN_BASE_CAPACITY,
   TERRAIN_BLOB_COUNT,
@@ -47,6 +50,14 @@ export interface TerrainGrid {
    * rather than per-call, matching the existing "persistent scratch array"
    * pattern already used by terrain generation. */
   homeBoostScratch: Float32Array;
+  /** 1 where a cell is a pond, 0 elsewhere, flat row-major, length cols*rows.
+   * Always allocated (even when no pond was generated — see generatePonds)
+   * so every consumer can assume the field exists rather than checking for
+   * undefined. A water cell's resource/capacity are forced to 0 at
+   * generation time, so nothing forages there — it's not modeled as an
+   * obstacle citizens path around, just as ground with nothing to gain from
+   * standing on it. */
+  isWater: Uint8Array;
 }
 
 export function cellIndex(grid: TerrainGrid, cx: number, cy: number): number {
@@ -57,6 +68,11 @@ export function worldToCell(grid: TerrainGrid, x: number, y: number): { cx: numb
   const cx = clamp(Math.floor(x / grid.cellSize), 0, grid.cols - 1);
   const cy = clamp(Math.floor(y / grid.cellSize), 0, grid.rows - 1);
   return { cx, cy };
+}
+
+export function isWaterAt(grid: TerrainGrid, x: number, y: number): boolean {
+  const { cx, cy } = worldToCell(grid, x, y);
+  return grid.isWater[cellIndex(grid, cx, cy)] === 1;
 }
 
 export function cellToWorldCenter(grid: TerrainGrid, cx: number, cy: number): { x: number; y: number } {
@@ -141,7 +157,61 @@ export function createTerrain(
     capacity,
     pathWear: new Float32Array(cellCount),
     homeBoostScratch: new Float32Array(cellCount),
+    isWater: new Uint8Array(cellCount),
   };
+}
+
+/**
+ * Carves POND_COUNT roughly-circular ponds out of already-generated terrain:
+ * marks cells water and zeroes their resource/capacity. Deliberately a
+ * separate call rather than folded into createTerrain's own blob-gen pass —
+ * see the POND_* constants' doc comment for why (createWorld calls this
+ * explicitly; createTerrain's direct callers, i.e. every existing unit test,
+ * never see a pond and their rng draw sequence is untouched).
+ *
+ * No-ops on a world too small to fit a pond with breathing room, rather than
+ * producing a pond that eats the whole map or a degenerate randRange call.
+ */
+export function generatePonds(terrain: TerrainGrid, rng: Rng): void {
+  const { cols, rows } = terrain;
+  const margin = POND_RADIUS_CELLS + 2;
+  if (cols <= margin * 2 || rows <= margin * 2) return;
+
+  for (let p = 0; p < POND_COUNT; p++) {
+    const centerCx = randRange(rng, margin, cols - margin);
+    const centerCy = randRange(rng, margin, rows - margin);
+
+    // Smooth organic wobble: a few sine harmonics, phase/amplitude rolled
+    // ONCE per pond, evaluated as a function of angle. This is what makes it
+    // a lumpy-but-solid blob rather than the per-cell-independent-noise
+    // version this replaced, which perturbed the radius test with a fresh
+    // random value at every single cell — that produces salt-and-pepper
+    // speckling right at the boundary (stray water cells poking out,
+    // stray gaps poking in) instead of a coherent wobbly shoreline, which is
+    // exactly what read as "not formed properly."
+    const harmonics = [2, 3, 5].map((freq) => ({
+      freq,
+      phase: rng() * Math.PI * 2,
+      amp: (POND_EDGE_JITTER * (0.5 + rng() * 0.5)) / freq,
+    }));
+
+    for (let cy = 0; cy < rows; cy++) {
+      for (let cx = 0; cx < cols; cx++) {
+        const dx = cx - centerCx;
+        const dy = cy - centerCy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx);
+        let wobble = 0;
+        for (const h of harmonics) wobble += h.amp * Math.sin(angle * h.freq + h.phase);
+        if (dist > POND_RADIUS_CELLS + wobble) continue;
+
+        const idx = cellIndex(terrain, cx, cy);
+        terrain.isWater[idx] = 1;
+        terrain.capacity[idx] = 0;
+        terrain.resource[idx] = 0;
+      }
+    }
+  }
 }
 
 /**
