@@ -112,6 +112,7 @@ async function main(): Promise<void> {
     world.update(nowSeconds, deltaSeconds);
     app.applyAtmosphere(world.palette.fog, world.palette.fogDensity);
     selection.update(nowSeconds);
+    camera.update(deltaSeconds);
     camera.controls.update();
     app.render(camera.camera);
 
